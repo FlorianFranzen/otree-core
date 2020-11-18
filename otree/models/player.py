@@ -1,11 +1,12 @@
-from otree.common import add_field_tracker, in_round, in_rounds
+from otree.common import in_round, in_rounds
 
 from otree.db import models
 from otree.models.fieldchecks import ensure_field
 from django.db import models as djmodels
+from otree.db.idmap import PlayerIDMapMixin
 
 
-class BasePlayer(models.OTreeModel):
+class BasePlayer(models.OTreeModel, PlayerIDMapMixin):
     """
     Base class for all players.
     """
@@ -43,8 +44,12 @@ class BasePlayer(models.OTreeModel):
 
     round_number = models.PositiveIntegerField(db_index=True)
 
-    _gbat_is_waiting = models.BooleanField(default=False)
-    _gbat_grouped = models.BooleanField(default=False)
+    _role = models.StringField()
+
+    # as a property, that means it's overridable
+    @property
+    def role(self):
+        return self._role
 
     @property
     def payoff(self):
@@ -73,10 +78,6 @@ class BasePlayer(models.OTreeModel):
         else:
             fmt_string = '<Player {}>'
         return fmt_string.format(id_in_subsession)
-
-    def role(self):
-        # you can make this depend of self.id_in_group
-        return ''
 
     def in_round(self, round_number):
         return in_round(type(self), round_number, participant=self.participant)
@@ -116,8 +117,6 @@ class BasePlayer(models.OTreeModel):
             group_model, null=True, on_delete=models.CASCADE
         )
         ensure_field(cls, 'group', group_field)
-
-        add_field_tracker(cls)
 
     def start(self):
         pass

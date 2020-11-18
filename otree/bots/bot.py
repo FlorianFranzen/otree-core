@@ -20,7 +20,7 @@ from otree.common import (
     get_admin_secret_code,
     get_models_module,
 )
-import otree.db.idmap
+from otree.db import idmap
 
 ADMIN_SECRET_CODE = get_admin_secret_code()
 
@@ -170,18 +170,24 @@ class ParticipantBot(test.Client):
         if live_method_name:
             record = (player_bot.player.group_id, PageClass)
             if record not in self.executed_live_methods:
-                with otree.db.idmap.use_cache():
+                with idmap.use_cache():
                     bots_module = inspect.getmodule(player_bot)
                     method_calls_fn = getattr(bots_module, 'call_live_method', None)
                     if method_calls_fn:
-                        method = getattr(player_bot.group, live_method_name)
+                        players = {
+                            p.id_in_group: p for p in player_bot.group.get_players()
+                        }
+
+                        def method(id_in_group, data):
+                            return getattr(players[id_in_group], live_method_name)(data)
+
                         method_calls_fn(
                             method=method,
                             case=player_bot.case,
                             round_number=player_bot.round_number,
                             page_class=PageClass,
                         )
-                        otree.db.idmap.save_objects()
+
                 self.executed_live_methods.add(record)
 
     def _play_individually(self):

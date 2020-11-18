@@ -15,7 +15,7 @@ from django.http import JsonResponse, HttpResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
-from otree import forms
+from otree import forms, tasks
 from otree.currency import RealWorldCurrency
 from otree.common import (
     missing_db_tables,
@@ -28,6 +28,7 @@ from otree.models import Participant, Session
 from otree.session import SESSION_CONFIGS_DICT, SessionConfig
 from otree.views.abstract import AdminSessionPageMixin
 from django.db.models import Case, Value, When
+import otree.channels.utils as channel_utils
 
 
 def pretty_name(name):
@@ -201,7 +202,8 @@ class SessionEditProperties(AdminSessionPageMixin, vanilla.FormView):
         if rwc_per_point is not None:
             session.config['real_world_currency_per_point'] = rwc_per_point
 
-        self.session.save()
+        # ensure config gets saved because usually it doesn't
+        self.session.save(update_fields=['config', 'label', 'comment'])
         messages.success(self.request, 'Properties have been updated')
         return redirect('SessionEditProperties', session.code)
 
@@ -295,7 +297,7 @@ class SessionData(AdminSessionPageMixin, vanilla.TemplateView):
         for i, row in enumerate(rows, start=1):
             d_row = OrderedDict()
             # table always starts with participant 1
-            d_row['participant_label'] = 'P{}'.format(i)
+            d_row['numeric_label'] = 'P{}'.format(i)
             for t, v in zip(field_names_json, row):
                 d_row[t] = v
             self.context_json.append(d_row)
@@ -316,55 +318,26 @@ class SessionData(AdminSessionPageMixin, vanilla.TemplateView):
 
 
 class SessionMonitor(AdminSessionPageMixin, vanilla.TemplateView):
-    def vars_for_template(self):
-
+    def get_context_data(self, **kwargs):
         field_names = otree.export.get_field_names_for_live_update(Participant)
+
         display_names = {
-            '_id_in_session': 'ID in session',
+            '_numeric_label': '',
             'code': 'Code',
             'label': 'Label',
             '_current_page': 'Page',
             '_current_app_name': 'App',
             '_round_number': 'Round',
             '_current_page_name': 'Page name',
-            'status': 'Status',
-            '_last_page_timestamp': 'Time on page',
+            '_monitor_note': 'Waiting for',
+            '_last_page_timestamp': 'Time',
         }
-
-        callable_fields = {'status', '_id_in_session', '_current_page'}
-
         column_names = [display_names[col] for col in field_names]
 
-        advance_users_button_text = (
-            "Advance the slowest user(s) by one page, "
-            "by forcing a timeout on their current page. "
-        )
-
-        participants = self.session.participant_set.filter(visited=True)
-        rows = []
-
-        for participant in participants:
-            row = {}
-            for field_name in field_names:
-                value = getattr(participant, field_name)
-                if field_name in callable_fields:
-                    value = value()
-                row[field_name] = value
-            rows.append(row)
-
-        self.context_json = rows
-
-        return dict(
+        return super().get_context_data(
             column_names=column_names,
-            advance_users_button_text=advance_users_button_text,
+            socket_url=channel_utils.session_monitor_path(self.session.code),
         )
-
-    def get(self, request, *args, **kwargs):
-        context = self.get_context_data()
-        if self.request.META.get('CONTENT_TYPE') == 'application/json':
-            return JsonResponse(self.context_json, safe=False)
-        else:
-            return self.render_to_response(context)
 
 
 class SessionDescription(AdminSessionPageMixin, vanilla.TemplateView):
@@ -464,7 +437,6 @@ class AdminReport(AdminSessionPageMixin, vanilla.TemplateView):
 def get_json_from_pypi() -> dict:
     # import only if we need it
     import urllib.request
-    import urllib.parse
 
     try:
         f = urllib.request.urlopen('https://pypi.python.org/pypi/otree/json')
@@ -519,6 +491,8 @@ class AdvanceSession(vanilla.View):
 
     def post(self, request, session_code):
         session = get_object_or_404(otree.models.Session, code=session_code)
+        if otree.common.USE_REDIS:
+            tasks.set_base_url(request.build_absolute_uri('/'))
         session.advance_last_place_participants()
         return HttpResponse('ok')
 

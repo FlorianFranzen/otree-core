@@ -5,6 +5,7 @@ import numbers
 from collections import OrderedDict
 from decimal import Decimal
 from importlib import import_module
+from django.utils.html import escape
 
 import xlsxwriter
 from django.db.models import BinaryField, ForeignKey
@@ -14,7 +15,7 @@ from django.utils.encoding import force_text
 import otree
 from otree.currency import Currency, RealWorldCurrency
 from otree.common import get_models_module
-from otree.common2 import TIME_SPENT_COLUMNS
+from otree.common2 import TIME_SPENT_COLUMNS, write_page_completion_buffer
 from otree.models.group import BaseGroup
 from otree.models.participant import Participant
 from otree.models.player import BasePlayer
@@ -87,14 +88,14 @@ def _get_table_fields(Model, for_export=False):
             ]
         else:
             return [
-                '_id_in_session',
+                '_numeric_label',
                 'code',
                 'label',
                 '_current_page',
                 '_current_app_name',
                 '_round_number',
                 '_current_page_name',
-                'status',
+                '_monitor_note',
                 '_last_page_timestamp',
             ]
 
@@ -106,10 +107,7 @@ def _get_table_fields(Model, for_export=False):
             and f not in ['id', 'group_id', 'subsession_id']
         ]
 
-        if for_export:
-            return ['id_in_group'] + subclass_fields + ['payoff']
-        else:
-            return ['id_in_group', 'role'] + subclass_fields + ['payoff']
+        return ['id_in_group', 'role'] + subclass_fields + ['payoff']
 
     if issubclass(Model, BaseGroup):
         subclass_fields = [
@@ -152,10 +150,10 @@ def sanitize_for_csv(value) -> str:
 def sanitize_for_live_update(value):
     # force_text is necessary e.g. for CountryField, which is otherwise
     # not Json serializable
-    value = str(sanitize_for_csv(value))
+    value = escape(sanitize_for_csv(value))
     MAX_LENGTH = 30
     if len(value) > MAX_LENGTH:
-        return value[:MAX_LENGTH] + '...'
+        return value[:MAX_LENGTH] + '…'
     return value
 
 
@@ -312,8 +310,9 @@ def get_rows_for_wide_csv_round(app_name, round_number, sessions):
             subsession_rows = []
 
             for player in players:
-                # because player.payoff is a property
+                # because these are properties
                 player['payoff'] = player['_payoff']
+                player['role'] = player['_role']
                 row = []
                 all_objects = {
                     'player': player,
@@ -373,8 +372,9 @@ def get_rows_for_csv(app_name):
     ]
 
     for player in players:
-        # because player.payoff is a property
+        # because these are properties
         player['payoff'] = player['_payoff']
+        player['role'] = player['_role']
         row = []
         all_objects = {'player': player}
         for model_name in value_dicts:
@@ -387,6 +387,22 @@ def get_rows_for_csv(app_name):
                 row.append(sanitize_for_csv(value))
         rows.append(row)
 
+    return rows
+
+
+def get_rows_for_monitor(participants) -> list:
+    field_names = get_field_names_for_live_update(Participant)
+    callable_fields = {'_numeric_label', '_current_page'}
+    rows = []
+    for participant in participants:
+        row = {}
+        for field_name in field_names:
+            value = getattr(participant, field_name)
+            if field_name in callable_fields:
+                value = value()
+            row[field_name] = value
+        row['id_in_session'] = participant.id_in_session
+        rows.append(row)
     return rows
 
 
@@ -452,7 +468,11 @@ def custom_export_app(app_name, fp, file_extension):
         'participant', 'group', 'subsession', 'session'
     ).order_by('id')
     rows = models_module.custom_export(qs)
-    _export_csv_or_xlsx(fp, rows, file_extension)
+    # convert to strings so we don't get errors especially in xlsx write
+    str_rows = []
+    for row in rows:
+        str_rows.append([str(ele) for ele in row])
+    _export_csv_or_xlsx(fp, str_rows, file_extension)
 
 
 def _export_csv_or_xlsx(fp, rows, file_extension):
@@ -481,6 +501,7 @@ def _export_xlsx(fp, rows):
 
 
 def export_page_times(fp):
+    write_page_completion_buffer()
     batches = PageTimeBatch.objects.order_by('id').values_list('text', flat=True)
     fp.write(','.join(TIME_SPENT_COLUMNS) + '\n')
     for batch in batches:
