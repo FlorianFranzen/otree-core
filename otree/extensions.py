@@ -21,7 +21,10 @@ routing.py
 ----------
 
 Should contain a variable ``websocket_routes``,
-with a list of channel routes, as described in the Django channels documentation.
+with a list of websocket routes, as described in the Django channels documentation.
+
+Also can contain a variable ``channel_routes``,
+with a dictionary of channel workers, as described in the Django channels documentation.
 
 admin.py
 --------

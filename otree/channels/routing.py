@@ -37,12 +37,14 @@ websocket_routes = [
     url(r'^no_op/$', consumers.NoOp),
 ]
 
+channel_routes = {}
 
 extensions_modules = get_extensions_modules('routing')
 for extensions_module in extensions_modules:
     websocket_routes += getattr(extensions_module, 'websocket_routes', [])
+    channel_routes.update(getattr(extensions_module, 'channel_routes', {}))
 
-
-application = ProtocolTypeRouter(
-    {"websocket": AuthMiddlewareStack(URLRouter(websocket_routes))}
-)
+application = ProtocolTypeRouter({
+    "websocket": AuthMiddlewareStack(URLRouter(websocket_routes)),
+    "channel": ChannelNameRouter(channel_routes),
+})
